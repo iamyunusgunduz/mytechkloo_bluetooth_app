@@ -61,5 +61,9 @@
         <string>bluetooth-central</string>
         <string>bluetooth-peripheral</string>
     </array>
+	<key>LSApplicationQueriesSchemes</key>
+<array>
+  <string>App-prefs</string>
+</array>
 </dict>
 </plist>

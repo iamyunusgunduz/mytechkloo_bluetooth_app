@@ -1,13 +1,13 @@
-import 'dart:async';
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:bluetooth_enable_fork/bluetooth_enable_fork.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:io';
+import 'dart:async';
+import 'control_screen.dart';
 
 void main() {
-  // FlutterBluePlus'ın loglarını kapatarak konsolu temiz tutar.
   FlutterBluePlus.setLogLevel(LogLevel.none, color: false);
   runApp(const MyApp());
 }
@@ -21,7 +21,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'MyTechKloo',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
       home: const BluetoothScreen(),
@@ -38,7 +38,6 @@ class BluetoothScreen extends StatefulWidget {
 
 class _BluetoothScreenState extends State<BluetoothScreen> {
   BluetoothDevice? _connectedDevice;
-  BluetoothCharacteristic? _writeCharacteristic;
   StreamSubscription<List<ScanResult>>? _scanResultsSubscription;
   StreamSubscription<BluetoothConnectionState>? _connectionStateSubscription;
   StreamSubscription<BluetoothAdapterState>? _adapterStateSubscription;
@@ -52,7 +51,6 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
   void initState() {
     super.initState();
     _checkPermissions();
-    // Uygulama başlar başlamaz Bluetooth durumunu dinlemeye başla
     _adapterStateSubscription = FlutterBluePlus.adapterState.listen((state) {
       if (mounted) {
         setState(() {
@@ -60,11 +58,9 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
           if (state == BluetoothAdapterState.on) {
             _status = 'Bluetooth aktif. Taramaya hazır.';
           } else {
-            // Bluetooth kapanırsa, taramayı durdur ve bağlantıyı sıfırla
             _isScanning = false;
             FlutterBluePlus.stopScan();
             _connectedDevice = null;
-            _writeCharacteristic = null;
             _status = 'Bluetooth kapalı. Lütfen açın.';
           }
         });
@@ -74,15 +70,13 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
 
   @override
   void dispose() {
-    // Sayfadan çıkıldığında tüm dinleyicileri iptal et
     _scanResultsSubscription?.cancel();
     _connectionStateSubscription?.cancel();
     _adapterStateSubscription?.cancel();
-    _disconnect(); // Uygulama kapanırken bağlantıyı kes
+    _disconnect();
     super.dispose();
   }
 
-  // Gerekli izinleri kontrol et ve iste
   Future<void> _checkPermissions() async {
     await [
       Permission.bluetooth,
@@ -92,21 +86,57 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
     ].request();
   }
 
-  // Bluetooth'u aç/kapat (sadece Android)
   Future<void> _toggleBluetooth() async {
-    if (Platform.isAndroid) {
-      if (_adapterState == BluetoothAdapterState.on) {
+    if (_adapterState == BluetoothAdapterState.on) {
+      if (Platform.isAndroid) {
         await FlutterBluePlus.turnOff();
-      } else {
-        await FlutterBluePlus.turnOn();
+      }
+    } else {
+      if (Platform.isAndroid) {
+        try {
+          String result = await BluetoothEnable.enableBluetooth;
+          if (mounted) {
+            if (result == "true") {
+              setState(() {
+                _status = 'Bluetooth başarıyla açıldı.';
+              });
+            } else if (result == "false") {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Bluetooth açılamadı. Lütfen manuel olarak açın.')),
+              );
+            }
+          }
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Bluetooth açma hatası: ${e.toString()}')),
+            );
+          }
+        }
+      } else if (Platform.isIOS) {
+        // iOS'ta Bluetooth ayarlarını açmak için
+        final Uri url = Uri.parse('App-prefs:root=Bluetooth');
+        if (await canLaunchUrl(url)) {
+          await launchUrl(url);
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Ayarlar sayfası açılamadı.')),
+            );
+          }
+        }
       }
     }
   }
 
-  // Cihazları tara
   Future<void> _scanDevices() async {
-    // Bluetooth kapalıysa veya zaten taranıyorsa işlemi başlatma
-    if (_adapterState != BluetoothAdapterState.on || _isScanning) return;
+    if (_adapterState != BluetoothAdapterState.on) {
+      setState(() {
+        _status = 'Lütfen önce Bluetooth\'u açın.';
+      });
+      return;
+    }
+    if (_isScanning) return;
 
     setState(() {
       _isScanning = true;
@@ -124,7 +154,6 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
 
     await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
 
-    // Tarama durduğunda state'i güncelle
     await FlutterBluePlus.isScanning.where((val) => val == false).first;
     setState(() {
       _isScanning = false;
@@ -132,7 +161,6 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
     });
   }
 
-  // Taramayı durdur
   Future<void> _stopScan() async {
     await FlutterBluePlus.stopScan();
     setState(() {
@@ -140,23 +168,23 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
     });
   }
 
-  // Seçilen cihaza bağlan
   Future<void> _connectToDevice(ScanResult result) async {
     final device = result.device;
     setState(() {
       _status = '${device.platformName} cihazına bağlanılıyor...';
     });
 
-    // Bağlantı durumu değişikliklerini (örneğin kopmaları) dinle
     _connectionStateSubscription =
-        device.connectionState.listen((BluetoothConnectionState state) {
+        device.connectionState.listen((BluetoothConnectionState state) async {
       if (state == BluetoothConnectionState.disconnected) {
         if (mounted) {
           setState(() {
             _connectedDevice = null;
-            _writeCharacteristic = null;
             _status = 'Bağlantı kesildi. Tekrar bağlanın.';
           });
+          if (Navigator.of(context).canPop()) {
+            Navigator.of(context).pop();
+          }
         }
       }
     });
@@ -169,20 +197,30 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
       });
 
       List<BluetoothService> services = await device.discoverServices();
+      BluetoothCharacteristic? writeCharacteristic;
       for (BluetoothService service in services) {
         for (BluetoothCharacteristic characteristic in service.characteristics) {
           if (characteristic.properties.write) {
-            _writeCharacteristic = characteristic;
+            writeCharacteristic = characteristic;
             break;
           }
         }
-        if (_writeCharacteristic != null) break;
+        if (writeCharacteristic != null) break;
       }
 
-      if (_writeCharacteristic != null) {
+      if (writeCharacteristic != null) {
         setState(() {
           _status = '${device.platformName} bağlandı ve komuta hazır.';
         });
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ControlScreen(
+              device: device,
+              writeCharacteristic: writeCharacteristic!,
+            ),
+          ),
+        );
       } else {
         setState(() {
           _status = 'Yazma özelliği bulunamadı. Bağlantı kesiliyor.';
@@ -196,220 +234,150 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
     }
   }
 
-  // Bağlantıyı kes
   Future<void> _disconnect() async {
     if (_connectedDevice != null) {
       await _connectedDevice!.disconnect();
-      // dinleyici zaten state'i güncelleyeceği için burada tekrar setState yapmaya gerek yok.
     }
   }
 
-  // Cihaza komut gönder
-  Future<void> _sendCommand(String command) async {
-    // Bağlantı ve karakteristik kontrolü
-    if (_connectedDevice == null || _writeCharacteristic == null) {
-      setState(() => _status = 'Bağlantı yok veya komut kanalı bulunamadı.');
-      return;
+  IconData _getSignalStrengthIcon(int rssi) {
+    if (rssi > -60) {
+      return Icons.signal_cellular_alt;
+    } else if (rssi > -70) {
+      return Icons.signal_cellular_alt_outlined;
+    } else if (rssi > -80) {
+      return Icons.signal_cellular_alt_2_bar;
+    } else if (rssi > -90) {
+      return Icons.signal_cellular_alt_1_bar;
+    } else {
+      return Icons.signal_cellular_alt_1_bar;
     }
-    try {
-      // Cihaz 'Write without Response' desteklemediği için bu parametreyi
-      // 'false' yapıyoruz. Bu, komutun gönderildiğine dair onay bekler.
-      await _writeCharacteristic!.write(command.codeUnits, withoutResponse: false);
-      
-      setState(() => _status = 'Komut gönderildi: $command');
-    } catch (e) {
-      setState(() => _status = 'Komut gönderilemedi: ${e.toString()}');
-    }
-  }
-
-  // Zaman ayarı için dialog penceresi
-  void _showTimePickerDialog() {
-    final minutesController = TextEditingController();
-    final secondsController = TextEditingController();
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Zaman Ayarı'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: minutesController,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(labelText: 'Dakika (xx)'),
-              ),
-              TextField(
-                controller: secondsController,
-                keyboardType: TextInputType.number,
-                inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                decoration: const InputDecoration(labelText: 'Saniye (zz)'),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('İptal'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final minutes = (minutesController.text.isEmpty)
-                    ? '00'
-                    : minutesController.text.padLeft(2, '0');
-                final seconds = (secondsController.text.isEmpty)
-                    ? '00'
-                    : secondsController.text.padLeft(2, '0');
-                final command = '[t=$minutes:$seconds]';
-                _sendCommand(command);
-                Navigator.of(context).pop();
-              },
-              child: const Text('Gönder'),
-            ),
-          ],
-        );
-      },
-    ).then((_) {
-      minutesController.dispose();
-      secondsController.dispose();
-    });
-  }
-
-  // Komut butonu oluşturan yardımcı fonksiyon
-  Widget _buildCommandButton(
-      {required String label, required IconData icon, required String command, VoidCallback? onPressed}) {
-    return ElevatedButton.icon(
-      icon: Icon(icon),
-      label: Text(label),
-      // Sadece bağlıyken butona basılmasına izin ver
-      onPressed: _connectedDevice != null ? (onPressed ?? () => _sendCommand(command)) : null,
-      style: ElevatedButton.styleFrom(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      ),
-    );
   }
 
   @override
   Widget build(BuildContext context) {
     bool isBtOn = _adapterState == BluetoothAdapterState.on;
     bool isConnected = _connectedDevice != null;
-    
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('MyTechKloo'),
-        leading: Platform.isAndroid
-            ? IconButton(
-                icon: Icon(
-                  isBtOn ? Icons.bluetooth_disabled : Icons.bluetooth,
-                  color: isBtOn ? Colors.blue : Colors.grey,
-                ),
-                onPressed: _toggleBluetooth,
-              )
-            : null,
-        actions: [
-          TextButton.icon(
-            icon: Icon(_isScanning ? Icons.stop_circle_outlined : Icons.search),
-            label: Text(_isScanning ? 'DURDUR' : 'TARA'),
-            // Sadece Bluetooth açıksa taramaya izin ver
-            onPressed: isBtOn ? (_isScanning ? _stopScan : _scanDevices) : null,
-          ),
-        ],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(12.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8.0),
-              decoration: BoxDecoration(
-                color: isConnected ? Colors.green.shade100 : Colors.orange.shade100,
-                borderRadius: BorderRadius.circular(8)
-              ),
-              child: Text(_status,
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    color: isConnected ? Colors.green.shade900 : Colors.orange.shade900
-                  )),
-            ),
-            const SizedBox(height: 10),
-            const Divider(height: 20),
-            Expanded(
-              child: _scanResults.isEmpty
-                  ? Center(child: Text(isBtOn ? 'Cihazları bulmak için TARA butonuna basın.' : 'Cihazları listelemek için Bluetooth\'u açın.'))
-                  : ListView.builder(
-                      itemCount: _scanResults.length,
-                      itemBuilder: (context, index) {
-                        ScanResult result = _scanResults[index];
-                        BluetoothDevice device = result.device;
-                        
-                        // RSSI değerine göre ikon seçimi
-                        IconData signalIcon;
-                        if (result.rssi > -60) {
-                          signalIcon = Icons.signal_wifi_4_bar; // Güçlü sinyal
-                        } else if (result.rssi > -80) {
-                          signalIcon = Icons.signal_wifi_4_bar; // Orta sinyal
-                        } else {
-                          signalIcon = Icons.signal_wifi_0_bar; // Zayıf sinyal
-                        }
 
-                        return Card(
-                          color: _connectedDevice?.remoteId == device.remoteId ? Colors.indigo.withOpacity(0.1) : null,
-                          child: ListTile(
-                            title: Text(device.platformName.isEmpty
-                                ? 'Bilinmeyen Cihaz'
-                                : device.platformName),
-                            subtitle: Text('${device.remoteId} (RSSI: ${result.rssi})'),
-                            trailing: _connectedDevice?.remoteId == device.remoteId
-                                ? const Icon(Icons.bluetooth_connected, color: Colors.green)
-                                : Icon(signalIcon, color: Colors.blue),
-                            onTap: () => _connectToDevice(result),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-            if (isConnected) ...[
-              const Divider(height: 20),
-              Text(
-                'Kontrol Paneli',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 10),
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 8.0,
-                runSpacing: 8.0,
-                children: [
-                  _buildCommandButton(label: 'Clean', icon: Icons.cleaning_services, command: '[c]'),
-                  _buildCommandButton(label: 'Manuel', icon: Icons.pan_tool, command: '[m]'),
-                  _buildCommandButton(label: 'Fan', icon: Icons.air, command: '[f]'),
-                  _buildCommandButton(label: 'LED', icon: Icons.lightbulb_outline, command: '[L]'),
-                  _buildCommandButton(label: 'Otomatik', icon: Icons.settings_power, command: '[o]'),
-                  _buildCommandButton(
-                    label: 'Zaman Ayarı',
-                    icon: Icons.timer,
-                    command: '', 
-                    onPressed: _showTimePickerDialog,
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              Color(0xFF6A1B9A), // Koyu mor
+              Color(0xFF8E24AA), // Orta mor
+              Color(0xFFAB47BC), // Açık mor
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              AppBar(
+                title: const Text('Bluetooth Cihazları', style: TextStyle(color: Colors.white)),
+                backgroundColor: Colors.transparent,
+                elevation: 0,
+                leading: Platform.isAndroid
+                    ? IconButton(
+                        icon: Icon(
+                          isBtOn ? Icons.bluetooth_disabled : Icons.bluetooth,
+                          color: Colors.white,
+                        ),
+                        onPressed: _toggleBluetooth,
+                      )
+                    : null,
+                actions: [
+                  TextButton.icon(
+                    style: TextButton.styleFrom(foregroundColor: Colors.white),
+                    icon: Icon(_isScanning ? Icons.stop_circle_outlined : Icons.search),
+                    label: Text(_isScanning ? 'DURDUR' : 'TARA'),
+                    onPressed: isBtOn ? (_isScanning ? _stopScan : _scanDevices) : null,
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
-              ElevatedButton.icon(
-                icon: const Icon(Icons.link_off),
-                label: const Text('Bağlantıyı Kes'),
-                onPressed: _disconnect,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
-                  foregroundColor: Colors.white,
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Container(
+                  padding: const EdgeInsets.all(12.0),
+                  decoration: BoxDecoration(
+                    color: isConnected ? Colors.green.shade100.withOpacity(0.9) : Colors.orange.shade100.withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(16),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.2),
+                        blurRadius: 8,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Text(
+                    _status,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: isConnected ? Colors.green.shade900 : Colors.orange.shade900,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16
+                    ),
+                  ),
                 ),
               ),
-            ]
-          ],
+              Expanded(
+                child: _scanResults.isEmpty
+                    ? Center(
+                        child: Text(
+                          isBtOn ? 'Cihazları bulmak için TARA butonuna basın.' : 'Cihazları listelemek için Bluetooth\'u açın.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 16),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                        itemCount: _scanResults.length,
+                        itemBuilder: (context, index) {
+                          ScanResult result = _scanResults[index];
+                          BluetoothDevice device = result.device;
+                          IconData signalIcon = _getSignalStrengthIcon(result.rssi);
+
+                          return Card(
+                            elevation: 8,
+                            margin: const EdgeInsets.symmetric(vertical: 8),
+                            color: Colors.white.withOpacity(0.9),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(15),
+                            ),
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                              title: Text(
+                                device.platformName.isEmpty ? 'Bilinmeyen Cihaz' : device.platformName,
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              subtitle: Text(
+                                '${device.remoteId}\nRSSI: ${result.rssi}',
+                                style: TextStyle(color: Colors.grey.shade600),
+                              ),
+                              trailing: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    _connectedDevice?.remoteId == device.remoteId ? Icons.bluetooth_connected : signalIcon,
+                                    color: _connectedDevice?.remoteId == device.remoteId ? Colors.green : Colors.deepPurple,
+                                    size: 30,
+                                  ),
+                                  if (_connectedDevice?.remoteId == device.remoteId)
+                                    const Text('Bağlı', style: TextStyle(color: Colors.green, fontSize: 12))
+                                ],
+                              ),
+                              onTap: () => _connectToDevice(result),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
         ),
       ),
     );

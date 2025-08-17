@@ -12,6 +12,7 @@ dependencies:
   flutter_blue_plus: ^1.10.3
   bluetooth_enable_fork: ^0.1.6
   permission_handler: ^10.4.0
+  url_launcher: ^6.1.10 
 
 dev_dependencies:
   flutter_test:
@@ -20,3 +21,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  
+  # Uygulamanızın kullanacağı varlıkları (assets) buraya ekleyin.
+  assets:
+    - lib/images/
