@@ -102,7 +102,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
               });
             } else if (result == "false") {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Bluetooth açılamadı. Lütfen manuel olarak açın.')),
+                const SnackBar(content: Text('Bluetooth açılamadı. Lütfen manuel olarak açın.')),
               );
             }
           }
@@ -121,7 +121,7 @@ class _BluetoothScreenState extends State<BluetoothScreen> {
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Ayarlar sayfası açılamadı.')),
+              const SnackBar(content: Text('Ayarlar sayfası açılamadı.')),
             );
           }
         }
